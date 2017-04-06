@@ -1,0 +1,247 @@
+<!DOCTYPE HTML>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>导出 golang 中的私有项 - ARwMq9b6's blog</title>
+        <meta content="text/html; charset=utf-8" http-equiv="Content-Type">
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+
+        <base href="../">
+
+        <link rel="stylesheet" href="book.css">
+        <link href='https://fonts.googleapis.com/css?family=Open+Sans:300italic,400italic,600italic,700italic,800italic,400,300,600,700,800' rel='stylesheet' type='text/css'>
+
+        <link rel="shortcut icon" href="favicon.png">
+
+        <!-- Font Awesome -->
+        <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/font-awesome/4.3.0/css/font-awesome.min.css">
+
+        <link rel="stylesheet" href="highlight.css">
+        <link rel="stylesheet" href="tomorrow-night.css">
+
+        <!-- MathJax -->
+        <script type="text/javascript" src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+
+        <!-- Fetch JQuery from CDN but have a local fallback -->
+        <script src="https://code.jquery.com/jquery-2.1.4.min.js"></script>
+        <script>
+            if (typeof jQuery == 'undefined') {
+                document.write(unescape("%3Cscript src='jquery.js'%3E%3C/script%3E"));
+            }
+        </script>
+    </head>
+    <body class="light">
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script type="text/javascript">
+            var theme = localStorage.getItem('theme');
+            if (theme == null) { theme = 'light'; }
+            $('body').removeClass().addClass(theme);
+        </script>
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script type="text/javascript">
+            var sidebar = localStorage.getItem('sidebar');
+            if (sidebar === "hidden") { $("html").addClass("sidebar-hidden") }
+            else if (sidebar === "visible") { $("html").addClass("sidebar-visible") }
+        </script>
+
+        <div id="sidebar" class="sidebar">
+            <ul class="chapter"><li class="affix"><a href="README.html">Introduction</a></li><li><a href="rust/index.html"><strong>1.</strong> Rust</a></li><li><a href="golang/index.html"><strong>2.</strong> Golang</a></li><li><ul class="section"><li><a href="golang/steal-go-privite-items.html" class="active"><strong>2.1.</strong> 导出 golang 中的私有项</a></li></ul></li></ul>
+        </div>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar" class="menu-bar">
+                    <div class="left-buttons">
+                        <i id="sidebar-toggle" class="fa fa-bars"></i>
+                        <i id="theme-toggle" class="fa fa-paint-brush"></i>
+                    </div>
+
+                    <h1 class="menu-title">ARwMq9b6's blog</h1>
+
+                    <div class="right-buttons">
+                        <i id="print-button" class="fa fa-print" title="Print this book"></i>
+                    </div>
+                </div>
+
+                <div id="content" class="content">
+                    <a class="header" href="golang\steal-go-privite-items.html#导出-golang-中的私有-unexported-项的方法" name="导出-golang-中的私有-unexported-项的方法"><h1>导出 golang 中的私有 (unexported) 项的方法</h1></a>
+<p>本文将以 go 标准库中的 <a href="https://github.com/golang/go/blob/master/src/sync/pool.go">sync/pool</a> 为例探讨导出 unexported 项的方法</p>
+<a class="header" href="golang\steal-go-privite-items.html#导出私有全局变量" name="导出私有全局变量"><h2>导出私有全局变量</h2></a>
+<p>通过 go:linkname 来导出私有全局变量</p>
+<pre><code class="language-go">package main
+
+import _ &quot;unsafe&quot;
+
+//go:linkname poolRaceHash sync.poolRaceHash
+var poolRaceHash [128]uint64
+
+func main() {
+    // main.poolRaceHash is an alias of sync.poolRaceHash
+    // -&gt; unexported item sync.poolRaceHash is stolen
+    var _ = poolRaceHash
+}
+</code></pre>
+<a class="header" href="golang\steal-go-privite-items.html#导出私有-struct-field" name="导出私有-struct-field"><h2>导出私有 struct field</h2></a>
+<p>可通过裸指针直接操作内存来导出私有 field</p>
+<pre><code class="language-go">package main
+
+import (
+    &quot;sync&quot;
+    &quot;unsafe&quot;
+)
+
+type Pool struct {
+    noCopy noCopy
+
+    local     unsafe.Pointer
+    localSize uintptr
+
+    New func() interface{}
+}
+
+type noCopy struct{}
+
+func main() {
+    // literally construct a `sync.Pool`
+    var externPool = sync.Pool{
+        New: func() interface{} {
+            return nil
+        },
+    }
+    var pool = (*Pool)(unsafe.Pointer(&amp;externPool))
+    // unexported item `sync.Pool.local` is stolen
+    _ = pool.local
+}
+</code></pre>
+<a class="header" href="golang\steal-go-privite-items.html#导出私有-function-或-method" name="导出私有-function-或-method"><h2>导出私有 function 或 method</h2></a>
+<a class="header" href="golang\steal-go-privite-items.html#方法-1-通过-golinkname" name="方法-1-通过-golinkname"><h3>方法 1: 通过 go:linkname</h3></a>
+<a class="header" href="golang\steal-go-privite-items.html#第一步" name="第一步"><h4>第一步</h4></a>
+<pre><code class="language-go">package main
+
+import (
+    &quot;sync&quot;
+    &quot;unsafe&quot;
+)
+
+type Pool struct {
+    noCopy noCopy
+
+    local     unsafe.Pointer
+    localSize uintptr
+
+    New func() interface{}
+}
+
+type noCopy struct{}
+
+type poolLocal struct {
+    private interface{}
+    shared  []interface{}
+    sync.Mutex
+    pad [128]byte
+}
+
+//go:linkname pinSlow sync.(*Pool).pinSlow
+func pinSlow(p *sync.Pool) *poolLocal
+
+//go:linkname (*Pool).pinSlow sync.(*Pool).pinSlow
+func (p *Pool) pinSlow() *poolLocal
+
+//go:linkname poolRaceAddr sync.poolRaceAddr
+func poolRaceAddr(x interface{}) unsafe.Pointer
+
+func main() {
+    // literally construct a `sync.Pool`
+    var externPool = sync.Pool{
+        New: func() interface{} {
+            return nil
+        },
+    }
+    var pool = (*Pool)(unsafe.Pointer(&amp;externPool))
+
+    // main.pinSlow is an alias of sync.(*Pool).pinSlow
+    // -&gt; unexported item sync.(*Pool).pinSlow is stolen
+    var _ = pinSlow(&amp;externPool)
+
+    // main.(*Pool).pinSlow is an alias of sync.(*Pool).pinSlow
+    // -&gt; unexported item sync.(*Pool).pinSlow is stolen
+    var _ = (*Pool).pinSlow(pool)
+
+    // main.poolRaceAddr is an alias of sync.poolRaceAddr
+    // -&gt; unexported item sync.poolRaceAddr is stolen
+    var _ = poolRaceAddr(nil)
+}
+</code></pre>
+<a class="header" href="golang\steal-go-privite-items.html#第二步" name="第二步"><h4>第二步</h4></a>
+<p>在项目中的新建一个空白的、任意名称的汇编代码文件（比如 <code>asm.s</code>）以帮助编译器完成函数完整性检查</p>
+<pre><code>go_export
+├── asm.s
+└── main.go
+</code></pre>
+<a class="header" href="golang\steal-go-privite-items.html#第三步" name="第三步"><h4>第三步</h4></a>
+<pre><code class="language-bash">$ go build
+</code></pre>
+<a class="header" href="golang\steal-go-privite-items.html#方法-2-直接获取运行时中的函数指针" name="方法-2-直接获取运行时中的函数指针"><h3>方法 2: 直接获取运行时中的函数指针</h3></a>
+<p><a href="https://github.com/alangpierce/go-forceexport">go-forceexport</a> 提供了这种便利</p>
+<a class="header" href="golang\steal-go-privite-items.html#注意事项" name="注意事项"><h2>注意事项</h2></a>
+<ul>
+<li>当使用 go:linkname 导出非标准库中的私有项时，须在当前包中显式地 import 来源包</li>
+</ul>
+<hr />
+<p><em>参考资料</em>：<a href="https://sitano.github.io/2016/04/28/golang-private/">https://sitano.github.io/2016/04/28/golang-private/</a></p>
+
+                </div>
+
+                <!-- Mobile navigation buttons -->
+                
+                    <a href="golang/index.html" class="mobile-nav-chapters previous">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+                
+
+                
+
+            </div>
+
+            
+                <a href="golang/index.html" class="nav-chapters previous" title="You can navigate through the chapters using the arrow keys">
+                    <i class="fa fa-angle-left"></i>
+                </a>
+            
+
+            
+
+        </div>
+
+
+        <!-- Local fallback for Font Awesome -->
+        <script>
+            if ($(".fa").css("font-family") !== "FontAwesome") {
+                $('<link rel="stylesheet" type="text/css" href="_FontAwesome/css/font-awesome.css">').prependTo('head');
+            }
+        </script>
+
+        <!-- Livereload script (if served using the cli tool) -->
+        
+        <script type="text/javascript">
+            var socket = new WebSocket("ws://localhost:3001");
+            socket.onmessage = function (event) {
+                if (event.data === "reload") {
+                    socket.close();
+                    location.reload(true); // force reload from server (not from cache)
+                }
+            };
+
+            window.onbeforeunload = function() {
+                socket.close();
+            }
+        </script>
+    
+
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+    </body>
+</html>
